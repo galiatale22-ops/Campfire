@@ -77,6 +77,8 @@ const floaters = [];       // 땅에 놓인 음식
 const peers = {};          // 다른 사용자
 const ME = { id: Math.random().toString(36).slice(2), name:'', x:0, y:0, sitting:false, bubble:'', bt:0, dir:1, hasWood:false };
 let joyVec = null;
+const labels = [];   // 글자는 도트 버퍼가 아닌 고해상도 화면에 따로 그림 (선명도 유지)
+function label(s, x, y, font, color, align){ labels.push({ s, x, y, font, color, align: align || 'center' }); }
 
 /* ---------- 유틸 ---------- */
 const dist = (x1,y1,x2,y2) => Math.hypot(x1-x2, y1-y2);
@@ -250,6 +252,7 @@ $('msg').addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); }
 addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   const k = e.key.toLowerCase();
+  if (k === 'enter') { e.preventDefault(); if (ME.name) $('msg').focus(); return; }
   keys[k] = true;
   if (k === 'c' && !e.repeat) toggleSit();
   if (k === 'f' && !e.repeat) interact();
@@ -379,15 +382,14 @@ function drawChar(c){
     blk(-5, wy, 10, 2, '#6b3f1c'); blk(-5, wy + 2, 10, 2, '#8a5526');
     blk(-6, wy, 1, 2, '#c08a4f'); blk(5, wy, 1, 2, '#c08a4f');
   }
-  ctx.font = 'bold 13px "Nanum Myeongjo", "나눔명조", serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
-  ctx.fillText(name || '', x, y - (sitting ? 34 : 46));
+  label(name || '', x, y - (sitting ? 34 : 46), 'bold 13px "Nanum Myeongjo", "나눔명조", serif', '#fff');
   // 말풍선 (픽셀 박스)
   if (bubble && bt > 0) {
     ctx.font = '15px "Nanum Myeongjo", "나눔명조", serif';
     const w = ctx.measureText(bubble).width + 16, by = y - (sitting ? 62 : 74);
     ctx.fillStyle = '#000'; ctx.fillRect(x - w/2 - 2, by - 16, w + 4, 24);
     ctx.fillStyle = '#fff'; ctx.fillRect(x - w/2, by - 14, w, 20);
-    ctx.fillStyle = '#111'; ctx.fillText(bubble, x, by + 1);
+    label(bubble, x, by + 1, '15px "Nanum Myeongjo", "나눔명조", serif', '#111');
   }
 }
 function drawCharOld(c){
@@ -438,6 +440,7 @@ function drawPiles(){
   }
 }
 function draw(){
+  labels.length = 0;
   ctx.setTransform(1/PX, 0, 0, 1/PX, 0, 0);
   ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, W, H);
   // 계단식 땅 색 (도트 그라데이션 느낌)
@@ -489,6 +492,9 @@ function loop(now){
   const dt = Math.min(.05, (now - last)/1000); last = now;
   update(dt); draw();
   view.drawImage(buf, 0, 0, cv.width, cv.height);
+  view.save(); view.textBaseline = 'alphabetic';
+  for (const l of labels) { view.font = l.font; view.fillStyle = l.color; view.textAlign = l.align; view.fillText(l.s, l.x, l.y); }
+  view.restore();
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
