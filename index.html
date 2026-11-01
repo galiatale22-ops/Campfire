@@ -247,9 +247,11 @@ $('btnFood').onclick = () => toast('E를 길게 눌러 음식을 고르세요 �
 $('btnSound').onclick = toggleSound;
 $('send').onclick = sendChat;
 $('msg').addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
+$('msg').addEventListener('focus', () => { for (const k in keys) keys[k] = false; joyVec = null; });
 
 /* ---------- 키보드 (WASD / 방향키 / E) ---------- */
 addEventListener('keydown', e => {
+  if (e.key === 'Escape') { if (document.activeElement === $('msg')) $('msg').blur(); return; }
   if (e.target.tagName === 'INPUT') return;
   const k = e.key.toLowerCase();
   if (k === 'enter') { e.preventDefault(); if (ME.name) $('msg').focus(); return; }
@@ -284,12 +286,14 @@ joy.addEventListener('touchcancel', joyEnd);
 
 /* ---------- 업데이트 ---------- */
 function update(dt){
+  const typing = document.activeElement === $('msg');
+  const K = typing ? {} : keys;
   let dx = 0, dy = 0;
-  if (keys.w || keys.arrowup)    dy--;
-  if (keys.s || keys.arrowdown)  dy++;
-  if (keys.a || keys.arrowleft)  dx--;
-  if (keys.d || keys.arrowright) dx++;
-  if (joyVec && Math.hypot(joyVec.x, joyVec.y) > .15) { dx += joyVec.x; dy += joyVec.y; }
+  if (K.w || K.arrowup)    dy--;
+  if (K.s || K.arrowdown)  dy++;
+  if (K.a || K.arrowleft)  dx--;
+  if (K.d || K.arrowright) dx++;
+  if (!typing && joyVec && Math.hypot(joyVec.x, joyVec.y) > .15) { dx += joyVec.x; dy += joyVec.y; }
   const len = Math.hypot(dx, dy);
   if (ME.name) {
     if (len > 0 && ME.sitting) { ME.sitting = false; updateSitBtn(); }
