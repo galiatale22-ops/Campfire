@@ -77,7 +77,7 @@ const keys = {};
 const parts = [];          // 불꽃 입자
 const floaters = [];       // 땅에 놓인 음식
 const peers = {};          // 다른 사용자
-const ME = { id: Math.random().toString(36).slice(2), name:'', x:0, y:0, sitting:false, bubble:'', bt:0, dir:1, hasWood:false };
+const ME = { id: Math.random().toString(36).slice(2), name:'', x:0, y:0, z:0, vz:0, sitting:false, bubble:'', bt:0, dir:1, hasWood:false };
 let joyVec = null;
 const labels = [];   // 글자는 도트 버퍼가 아닌 고해상도 화면에 따로 그림 (선명도 유지)
 function label(s, x, y, font, color, align){ labels.push({ s, x, y, font, color, align: align || 'center' }); }
@@ -116,7 +116,7 @@ const handle = d => {
   if (d.name) p.name = d.name;
   switch (d.type) {
     case 'join':  addLog(`${d.name}님이 캠프에 들어왔어요 👋`); break;
-    case 'state': p.fx = d.fx; p.fy = d.fy; p.sitting = d.sitting; p.wood = !!d.hasWood; break;
+    case 'state': p.fx = d.fx; p.fy = d.fy; p.z = d.z || 0; p.sitting = d.sitting; p.wood = !!d.hasWood; break;
     case 'chat':  addLog(`${d.name}: ${d.text}`); p.bubble = d.text; p.bt = 5; break;
     case 'food':
       p.bubble = d.emoji; p.bt = 3;
@@ -131,7 +131,7 @@ const handle = d => {
 };
 chan.on('broadcast', { event: 'msg' }, ({ payload }) => handle(payload));
 chan.subscribe(status => { if (status === 'SUBSCRIBED') addLog('🌐 캠프에 연결되었어요'); });
-setInterval(() => { if (ME.name && chan.state === 'joined') send({ type:'state', name:ME.name, fx:ME.x/W, fy:ME.y/H, sitting:ME.sitting, hasWood:ME.hasWood }); }, 150);
+setInterval(() => { if (ME.name && chan.state === 'joined') send({ type:'state', name:ME.name, fx:ME.x/W, fy:ME.y/H, z:ME.z, sitting:ME.sitting, hasWood:ME.hasWood }); }, 150);
 setInterval(() => {
   const now = Date.now();
   for (const id in peers) if (now - peers[id].seen > 6000) delete peers[id];
@@ -182,6 +182,10 @@ $('enter').onclick = join;
 $('nickIn').addEventListener('keydown', e => { if (e.key === 'Enter') join(); });
 
 /* ---------- 액션 ---------- */
+function jump(){
+  if (!ME.name || ME.sitting || ME.z > 0) return;
+  ME.vz = 260;
+}
 function toggleSit(){
   if (!ME.name) return;
   if (ME.sitting) { ME.sitting = false; updateSitBtn(); return; }
@@ -210,7 +214,6 @@ function nearFood(){
 function eatFood(f){
   floaters.splice(floaters.indexOf(f), 1);
   ME.bubble = '😋'; ME.bt = 2;
-  addLog(`${ME.name}님이 ${f.emoji}를 먹었어요 😋`);
   toast(`${f.emoji} 맛있게 먹었어요!`);
 }
 function nearFire(){ return dist(ME.x, ME.y, W/2, H/2) <= FIRE_WOOD_MAX; }
@@ -286,7 +289,7 @@ addEventListener('keydown', e => {
   if (k === 'f' && !e.repeat) interact();
   if (k === 'e' && !e.repeat) onEDown();
   if (e.key === 'Tab') { e.preventDefault(); if (menu.open) menu.sel = (menu.sel + 1) % CAMP_FOODS.length; }
-  if (e.key === ' ') e.preventDefault();
+  if (e.key === ' ') { e.preventDefault(); if (!e.repeat) jump(); }
 });
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; if (e.key.toLowerCase() === 'e') onEUp(); });
 
@@ -333,6 +336,10 @@ function update(dt){
     if (fd < 45) {
       const a = Math.atan2(ME.y - H/2, ME.x - W/2);
       ME.x = W/2 + Math.cos(a)*45; ME.y = H/2 + Math.sin(a)*45;
+    }
+    if (ME.z > 0 || ME.vz > 0) {  // 점프 물리 (중력)
+      ME.vz -= 900*dt; ME.z += ME.vz*dt;
+      if (ME.z <= 0) { ME.z = 0; ME.vz = 0; }
     }
     ME.x = clamp(ME.x, 24, W-24); ME.y = clamp(ME.y, 24, H-24);
     if (ME.bt > 0) ME.bt -= dt;
@@ -491,10 +498,10 @@ function draw(){
   // 다른 사용자
   for (const id in peers) {
     const p = peers[id];
-    drawChar({ x: p.fx*W, y: p.fy*H, sitting: p.sitting, name: p.name, bubble: p.bubble, bt: p.bt, wood: p.wood });
+    drawChar({ x: p.fx*W, y: p.fy*H - (p.z||0), sitting: p.sitting, name: p.name, bubble: p.bubble, bt: p.bt, wood: p.wood });
   }
   // 나
-  if (ME.name) drawChar({ x: ME.x, y: ME.y, sitting: ME.sitting, name: ME.name, bubble: ME.bubble, bt: ME.bt, dir: ME.dir, wood: ME.hasWood });
+  if (ME.name) drawChar({ x: ME.x, y: ME.y - ME.z, sitting: ME.sitting, name: ME.name, bubble: ME.bubble, bt: ME.bt, dir: ME.dir, wood: ME.hasWood });
   if (ME.name && menu.open) {  // 캠프 셰어링 음식 선택 메뉴 (머리 위 플로팅)
     const mx = ME.x, my = ME.y - 96, itemW = 64, total = CAMP_FOODS.length * itemW;
     ctx.fillStyle = 'rgba(0,0,0,.75)'; ctx.fillRect(mx - total/2 - 6, my - 22, total + 12, 44);
