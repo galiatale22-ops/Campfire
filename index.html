@@ -16,8 +16,9 @@ canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
 #bar input{font-family:inherit;flex:1;min-width:0;padding:10px 12px;border-radius:12px;border:none;outline:none;font-size:15px;user-select:text;-webkit-user-select:text}
 button{font-family:"Nanum Myeongjo","나눔명조",serif;background:#c2410c;color:#fff;border:none;border-radius:12px;padding:10px 12px;font-size:14px;cursor:pointer;white-space:nowrap}
 button:active{filter:brightness(.85)}
-#joy{position:fixed;left:16px;bottom:64px;width:130px;height:130px;border-radius:50%;background:rgba(255,255,255,.12);display:none;touch-action:none;border:2px solid rgba(255,255,255,.2)}
-#knob{position:absolute;width:50px;height:50px;border-radius:50%;background:rgba(255,190,110,.65);left:40px;top:40px}
+#dpad{position:fixed;left:14px;bottom:64px;display:none;grid-template-columns:repeat(3,52px);grid-template-rows:repeat(3,52px);gap:4px}
+.dp{background:rgba(255,255,255,.18);border:2px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-size:20px;padding:0;touch-action:none;user-select:none;-webkit-user-select:none}
+.dp:active{background:rgba(255,190,110,.6)}
 #nick{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:9}
 #nick .box{background:#1f2937;padding:24px;border-radius:16px;text-align:center;width:min(320px,88vw)}
 #nick input{width:100%;padding:10px;border-radius:10px;border:none;margin:10px 0;box-sizing:border-box;font-size:15px;outline:none}
@@ -33,7 +34,11 @@ button:active{filter:brightness(.85)}
 <div id="toast"></div>
 <div id="yt"></div>
 <div id="now"></div>
-<div id="joy"><div id="knob"></div></div>
+<div id="dpad">
+  <span></span><button class="dp" data-k="arrowup">▲</button><span></span>
+  <button class="dp" data-k="arrowleft">◀</button><span></span><button class="dp" data-k="arrowright">▶</button>
+  <span></span><button class="dp" data-k="arrowdown">▼</button><span></span>
+</div>
 <div id="actions">
   <button id="btnSit">🪑 앉기 (C)</button>
   <button id="btnWood">🪵 장작 들기/넣기 (F)</button>
@@ -320,25 +325,20 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; if (e.key.toLowerCase() === 'e') onEUp(); });
 
-/* ---------- 조이스틱 (휴대폰) ---------- */
-const joy = $('joy'), knob = $('knob');
-if (matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window) joy.style.display = 'block';
-function joyMove(e){
-  const t = e.touches ? e.touches[0] : e;
-  const r = joy.getBoundingClientRect();
-  let x = t.clientX - (r.left + r.width/2), y = t.clientY - (r.top + r.height/2);
-  const max = r.width/2, len = Math.hypot(x,y);
-  if (len > max) { x *= max/len; y *= max/len; }
-  knob.style.left = (r.width/2 + x - 25) + 'px';
-  knob.style.top  = (r.height/2 + y - 25) + 'px';
-  joyVec = { x: x/max, y: y/max };
-  e.preventDefault();
-}
-function joyEnd(){ joyVec = null; knob.style.left = '40px'; knob.style.top = '40px'; }
-joy.addEventListener('touchstart', joyMove, { passive:false });
-joy.addEventListener('touchmove', joyMove, { passive:false });
-joy.addEventListener('touchend', joyEnd);
-joy.addEventListener('touchcancel', joyEnd);
+/* ---------- 방향키 패드 (휴대폰) ---------- */
+const dpad = $('dpad');
+if (matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window) dpad.style.display = 'grid';
+document.querySelectorAll('.dp').forEach(b => {
+  const k = b.dataset.k;
+  const on = e => { e.preventDefault(); keys[k] = true; };
+  const off = e => { e.preventDefault(); keys[k] = false; };
+  b.addEventListener('touchstart', on, { passive:false });
+  b.addEventListener('touchend', off);
+  b.addEventListener('touchcancel', off);
+  b.addEventListener('mousedown', on);
+  b.addEventListener('mouseup', off);
+  b.addEventListener('mouseleave', off);
+});
 
 /* ---------- 업데이트 ---------- */
 function update(dt){
@@ -349,11 +349,12 @@ function update(dt){
   if (K.s || K.arrowdown)  dy++;
   if (K.a || K.arrowleft)  dx--;
   if (K.d || K.arrowright) dx++;
-  // 8방향 (키보드는 바로, 조이스틱은 가장 가까운 45도 방향으로)
+  // 4방향 (상하좌우만. 동시에 누르면 가로 우선, 조이스틱은 기울기가 큰 축 기준)
   let sx = Math.sign(dx), sy = Math.sign(dy);
+  if (sx && sy) sy = 0;
   if (!typing && joyVec && Math.hypot(joyVec.x, joyVec.y) > .3) {
-    const k = Math.round(Math.atan2(joyVec.y, joyVec.x) / (Math.PI/4));
-    sx = Math.round(Math.cos(k*Math.PI/4)); sy = Math.round(Math.sin(k*Math.PI/4));
+    if (Math.abs(joyVec.x) >= Math.abs(joyVec.y)) { sx = Math.sign(joyVec.x); sy = 0; }
+    else { sx = 0; sy = Math.sign(joyVec.y); }
   }
   if (ME.name) {
     // 타일 단위 이동: 누르면 한 칸, 계속 누르고 있으면 다음 칸으로 계속 이동
