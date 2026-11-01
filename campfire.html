@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>모닥불 캠프 🔥</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#05070c;font-family:"Nanum Myeongjo","나눔명조",serif;color:#fff;user-select:none;-webkit-user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#log{position:fixed;top:12px;left:12px;width:min(300px,60vw);max-height:32vh;overflow:auto;background:rgba(0,0,0,.45);border-radius:12px;padding:8px 10px;font-size:13px;line-height:1.5;user-select:text;-webkit-user-select:text}
+#log div{margin:2px 0;word-break:break-all}
+#toast{position:fixed;top:14%;left:50%;transform:translateX(-50%);background:rgba(20,20,20,.88);padding:10px 18px;border-radius:20px;opacity:0;transition:opacity .3s;pointer-events:none;font-size:14px;white-space:nowrap}
+#actions{position:fixed;right:12px;bottom:64px;display:flex;flex-direction:column;gap:8px}
+#bar{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);display:flex;gap:6px;width:min(560px,94vw)}
+#bar input{font-family:inherit;flex:1;min-width:0;padding:10px 12px;border-radius:12px;border:none;outline:none;font-size:15px;user-select:text;-webkit-user-select:text}
+button{font-family:"Nanum Myeongjo","나눔명조",serif;background:#c2410c;color:#fff;border:none;border-radius:12px;padding:10px 12px;font-size:14px;cursor:pointer;white-space:nowrap}
+button:active{filter:brightness(.85)}
+#joy{position:fixed;left:16px;bottom:64px;width:130px;height:130px;border-radius:50%;background:rgba(255,255,255,.12);display:none;touch-action:none;border:2px solid rgba(255,255,255,.2)}
+#knob{position:absolute;width:50px;height:50px;border-radius:50%;background:rgba(255,190,110,.65);left:40px;top:40px}
+#nick{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:9}
+#nick .box{background:#1f2937;padding:24px;border-radius:16px;text-align:center;width:min(320px,88vw)}
+#nick input{width:100%;padding:10px;border-radius:10px;border:none;margin:10px 0;box-sizing:border-box;font-size:15px;outline:none}
+#nick button{width:100%}
+#nick p{color:#cbd5e1;font-size:14px;margin:4px 0}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="log"></div>
+<div id="toast"></div>
+<div id="joy"><div id="knob"></div></div>
+<div id="actions">
+  <button id="btnSit">🪑 앉기 (C)</button>
+  <button id="btnWood">🪵 장작 들기/넣기 (F)</button>
+  <button id="btnFood">🏕️ 캠프 셰어링 (E)</button>
+  <button id="btnSound">🔊 사운드 끄기</button>
+</div>
+<div id="bar">
+  <input id="msg" maxlength="80" placeholder="메시지를 입력하세요 (Enter)">
+  <button id="send">전송</button>
+</div>
+<div id="nick">
+  <div class="box">
+    <h2 style="margin:0">🔥 모닥불 캠프</h2>
+    <p>캠프에서 사용할 닉네임을 정해주세요</p>
+    <input id="nickIn" maxlength="10" placeholder="닉네임 (최대 10자)">
+    <button id="enter">입장하기</button>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const cv = $('c'), view = cv.getContext('2d');
+const buf = document.createElement('canvas'), ctx = buf.getContext('2d');
+const PX = 2; // 도트 크기 (숫자가 클수록 더 굵은 픽셀)
+let W = 0, H = 0;
+function resize(){
+  W = cv.width = innerWidth; H = cv.height = innerHeight;
+  buf.width = Math.ceil(W/PX); buf.height = Math.ceil(H/PX);
+  view.imageSmoothingEnabled = false;
+}
+addEventListener('resize', resize); resize();
+
+const FIRE_SIT_MIN = 90;   // 모닥불에서 이 거리 안에서는 앉기 불가
+const MAX_FUEL = 6;
+const FIRE_WOOD_MAX = 130;  // 장작을 넣을 수 있는 모닥불과의 최대 거리
+const WOOD_PICK_DIST = 70; // 장작더미에서 장작을 집을 수 있는 거리
+const WOOD_PILES = [{fx:.12,fy:.22},{fx:.86,fy:.2},{fx:.1,fy:.78},{fx:.9,fy:.8}];
+const CAMP_FOODS = [{n:'감자',e:'🥔'},{n:'고구마',e:'🍠'},{n:'고기',e:'🍖'},{n:'소세지',e:'🌭'}];
+let eHold = null;                 // E 누르고 있는 상태 (타이머)
+const menu = { open:false, sel:0 }; // 캠프 셰어링 음식 선택 메뉴
+let fuel = 2;
+const keys = {};
+const parts = [];          // 불꽃 입자
+const floaters = [];       // 땅에 놓인 음식
+const peers = {};          // 다른 사용자
+const ME = { id: Math.random().toString(36).slice(2), name:'', x:0, y:0, sitting:false, bubble:'', bt:0, dir:1, hasWood:false };
+let joyVec = null;
+
+/* ---------- 유틸 ---------- */
+const dist = (x1,y1,x2,y2) => Math.hypot(x1-x2, y1-y2);
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+function colorOf(s){ let h=0; for(const c of s) h=(h*31+c.charCodeAt(0))%360; return `hsl(${h} 70% 60%)`; }
+function toast(msg){
+  const t = $('toast'); t.textContent = msg; t.style.opacity = 1;
+  clearTimeout(toast.t); toast.t = setTimeout(()=> t.style.opacity = 0, 1800);
+}
+function addLog(text){
+  const L = $('log'), el = document.createElement('div');
+  el.textContent = text; L.appendChild(el);
+  while (L.children.length > 80) L.firstChild.remove();
+  L.scrollTop = L.scrollHeight;
+}
+function updateSitBtn(){ $('btnSit').textContent = ME.sitting ? '🧍 일어서기 (C)' : '🪑 앉기 (C)'; }
+
+/* ---------- 실시간 통신 (Supabase Realtime 브로드캐스트) ---------- */
+const SUPABASE_URL = 'https://vapckojrnfvxlagjhrmd.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZhcGNrb2pybmZ2eGxhZ2pocm1kIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM1NDMwNDMsImV4cCI6MjEwOTExOTA0M30.0aKl62aHqDLFOef17IBi3xw8rELvjEuOqOxI9qpEreo';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const chan = sb.channel('campfire-room', { config: { broadcast: { self: false } } });
+const send = o => { chan.send({ type: 'broadcast', event: 'msg', payload: { ...o, from: ME.id } }); };
+const handle = d => {
+  if (!d || d.from === ME.id) return;
+  if (d.type === 'leave') {
+    if (peers[d.from]) addLog(`${peers[d.from].name}님이 떠났어요`);
+    delete peers[d.from]; return;
+  }
+  let p = peers[d.from];
+  if (!p) p = peers[d.from] = { name: d.name || '손님', fx:.5, fy:.6, sitting:false, bubble:'', bt:0, seen:0 };
+  p.seen = Date.now();
+  if (d.name) p.name = d.name;
+  switch (d.type) {
+    case 'join':  addLog(`${d.name}님이 캠프에 들어왔어요 👋`); break;
+    case 'state': p.fx = d.fx; p.fy = d.fy; p.sitting = d.sitting; p.wood = !!d.hasWood; break;
+    case 'chat':  addLog(`${d.name}: ${d.text}`); p.bubble = d.text; p.bt = 5; break;
+    case 'food':
+      addLog(`${d.name}님이 캠프 셰어링으로 ${d.emoji}를 놓았어요 🙌`);
+      p.bubble = d.emoji; p.bt = 3;
+      spawnFood(d.emoji, p.fx*W, p.fy*H); break;
+    case 'wood':
+      fuel = d.fuel; addLog(`${d.name}님이 장작을 넣었어요 🪵`); break;
+  }
+};
+chan.on('broadcast', { event: 'msg' }, ({ payload }) => handle(payload));
+chan.subscribe(status => { if (status === 'SUBSCRIBED') addLog('🌐 캠프에 연결되었어요'); });
+setInterval(() => { if (ME.name && chan.state === 'joined') send({ type:'state', name:ME.name, fx:ME.x/W, fy:ME.y/H, sitting:ME.sitting, hasWood:ME.hasWood }); }, 150);
+setInterval(() => {
+  const now = Date.now();
+  for (const id in peers) if (now - peers[id].seen > 6000) delete peers[id];
+}, 2000);
+addEventListener('pagehide', () => { if (ME.name) send({ type:'leave', name:ME.name }); });
+
+/* ---------- 모닥불 사운드 (타닥거리는 효과음만, Web Audio로 생성) ---------- */
+let actx = null, fireGain = null, soundOn = true;
+function startFireSound(){
+  if (actx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  actx = new AC();
+  // 불티 효과음 전용 볼륨 노드 (배경 웅웅거림은 제거)
+  fireGain = actx.createGain(); fireGain.gain.value = soundOn ? 1 : 0;
+  fireGain.connect(actx.destination);
+  // 타닥타닥 불티 소리: 짧은 노이즈 펄스를 랜덤 간격으로 재생
+  const crackle = () => {
+    if (actx.state === 'running' && soundOn) {
+      const n = actx.sampleRate * 0.02 | 0;
+      const cb = actx.createBuffer(1, n, actx.sampleRate), cd = cb.getChannelData(0);
+      for (let i = 0; i < n; i++) cd[i] = (Math.random()*2-1) * Math.exp(-i/(n*0.15));
+      const c = actx.createBufferSource(), g = actx.createGain();
+      c.buffer = cb; g.gain.value = 0.3*Math.random();
+      c.connect(g); g.connect(fireGain); c.start();
+    }
+    setTimeout(crackle, 80 + Math.random()*420);
+  };
+  crackle();
+}
+function toggleSound(){
+  soundOn = !soundOn;
+  if (fireGain) fireGain.gain.value = soundOn ? 1 : 0;
+  if (actx && soundOn && actx.state === 'suspended') actx.resume();
+  $('btnSound').textContent = soundOn ? '🔊 사운드 끄기' : '🔇 사운드 켜기';
+}
+
+/* ---------- 입장 ---------- */
+function join(){
+  const n = $('nickIn').value.trim().slice(0,10) || ('캠퍼' + Math.floor(Math.random()*900+100));
+  ME.name = n; ME.x = W*.3; ME.y = H*.62;
+  $('nick').style.display = 'none';
+  startFireSound();
+  addLog(`${n}님, 모닥불 캠프에 오신 걸 환영해요! 🔥`);
+  send({ type:'join', name:n });
+}
+$('enter').onclick = join;
+$('nickIn').addEventListener('keydown', e => { if (e.key === 'Enter') join(); });
+
+/* ---------- 액션 ---------- */
+function toggleSit(){
+  if (!ME.name) return;
+  if (ME.sitting) { ME.sitting = false; updateSitBtn(); return; }
+  if (dist(ME.x, ME.y, W/2, H/2) < FIRE_SIT_MIN) { toast('불가에 너무 가깝습니다 🔥'); return; }
+  ME.sitting = true; updateSitBtn();
+}
+function interact(){
+  if (!ME.name) return;
+  if (ME.hasWood) {
+    if (dist(ME.x, ME.y, W/2, H/2) > FIRE_WOOD_MAX) { toast('모닥불 가까이 가서 넣으세요 🔥'); return; }
+    if (fuel >= MAX_FUEL) { toast('장작이 가득 찼어요! (최대 6)'); return; }
+    ME.hasWood = false;
+    fuel = Math.min(MAX_FUEL, fuel + 1);
+    addLog(`${ME.name}님이 장작을 넣었어요 🪵`);
+    send({ type:'wood', name:ME.name, fuel });
+  } else {
+    if (!nearPile()) { toast('장작더미 근처에서 F를 누르세요'); return; }
+    ME.hasWood = true;
+    toast('장작을 들었어요 🪵');
+  }
+}
+const FOOD_EAT_DIST = 70; // 바닥 음식을 먹을 수 있는 거리
+function nearFood(){
+  return floaters.find(f => dist(ME.x, ME.y, f.x, f.y) < FOOD_EAT_DIST);
+}
+function eatFood(f){
+  floaters.splice(floaters.indexOf(f), 1);
+  ME.bubble = '😋'; ME.bt = 2;
+  addLog(`${ME.name}님이 ${f.emoji}를 먹었어요 😋`);
+  toast(`${f.emoji} 맛있게 먹었어요!`);
+}
+function nearFire(){ return dist(ME.x, ME.y, W/2, H/2) <= FIRE_WOOD_MAX; }
+function onEDown(){
+  if (!ME.name || eHold) return;
+  const f = nearFood();
+  if (f) { eatFood(f); return; }
+  if (!nearFire()) { toast('모닥불 근처에서 E를 눌러 셰어링하세요 🔥'); return; }
+  eHold = { timer: setTimeout(() => { menu.open = true; }, 350) };
+}
+function onEUp(){
+  if (!eHold) return;
+  clearTimeout(eHold.timer); eHold = null;
+  menu.open = false;
+  if (ME.name) placeFood(CAMP_FOODS[menu.sel]);
+}
+function placeFood(food){
+  ME.bubble = food.e; ME.bt = 3;
+  spawnFood(food.e, ME.x, ME.y);
+  addLog(`${ME.name}님이 ${food.n}(${food.e})를 모닥불 근처에 놓았어요 🙌`);
+  send({ type:'food', name:ME.name, emoji:food.e });
+}
+function sendChat(){
+  const t = $('msg').value.trim();
+  if (!t || !ME.name) return;
+  $('msg').value = '';
+  ME.bubble = t; ME.bt = 5;
+  addLog(`${ME.name}: ${t}`);
+  send({ type:'chat', name:ME.name, text:t });
+}
+function spawnFood(emoji, x, y){
+  if (floaters.length > 20) floaters.shift();
+  const a = Math.random()*Math.PI*2, r = 60 + Math.random()*70;
+  floaters.push({ emoji, x, y, tx: W/2 + Math.cos(a)*r, ty: H/2 + Math.sin(a)*r*.6, ttl: 12 });
+}
+$('btnSit').onclick = toggleSit;
+$('btnWood').onclick = interact;
+$('btnFood').onclick = () => toast('E를 길게 눌러 음식을 고르세요 🍢');
+$('btnSound').onclick = toggleSound;
+$('send').onclick = sendChat;
+$('msg').addEventListener('keydown', e => { if (e.key === 'Enter') sendChat(); });
+
+/* ---------- 키보드 (WASD / 방향키 / E) ---------- */
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  const k = e.key.toLowerCase();
+  keys[k] = true;
+  if (k === 'c' && !e.repeat) toggleSit();
+  if (k === 'f' && !e.repeat) interact();
+  if (k === 'e' && !e.repeat) onEDown();
+  if (e.key === 'Tab') { e.preventDefault(); if (menu.open) menu.sel = (menu.sel + 1) % CAMP_FOODS.length; }
+  if (e.key === ' ') e.preventDefault();
+});
+addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; if (e.key.toLowerCase() === 'e') onEUp(); });
+
+/* ---------- 조이스틱 (휴대폰) ---------- */
+const joy = $('joy'), knob = $('knob');
+if (matchMedia('(pointer:coarse)').matches || 'ontouchstart' in window) joy.style.display = 'block';
+function joyMove(e){
+  const t = e.touches ? e.touches[0] : e;
+  const r = joy.getBoundingClientRect();
+  let x = t.clientX - (r.left + r.width/2), y = t.clientY - (r.top + r.height/2);
+  const max = r.width/2, len = Math.hypot(x,y);
+  if (len > max) { x *= max/len; y *= max/len; }
+  knob.style.left = (r.width/2 + x - 25) + 'px';
+  knob.style.top  = (r.height/2 + y - 25) + 'px';
+  joyVec = { x: x/max, y: y/max };
+  e.preventDefault();
+}
+function joyEnd(){ joyVec = null; knob.style.left = '40px'; knob.style.top = '40px'; }
+joy.addEventListener('touchstart', joyMove, { passive:false });
+joy.addEventListener('touchmove', joyMove, { passive:false });
+joy.addEventListener('touchend', joyEnd);
+joy.addEventListener('touchcancel', joyEnd);
+
+/* ---------- 업데이트 ---------- */
+function update(dt){
+  let dx = 0, dy = 0;
+  if (keys.w || keys.arrowup)    dy--;
+  if (keys.s || keys.arrowdown)  dy++;
+  if (keys.a || keys.arrowleft)  dx--;
+  if (keys.d || keys.arrowright) dx++;
+  if (joyVec && Math.hypot(joyVec.x, joyVec.y) > .15) { dx += joyVec.x; dy += joyVec.y; }
+  const len = Math.hypot(dx, dy);
+  if (ME.name) {
+    if (len > 0 && ME.sitting) { ME.sitting = false; updateSitBtn(); }
+    if (len > 1) { dx /= len; dy /= len; }
+    if (len > 0) {
+      ME.x += dx * 200 * dt; ME.y += dy * 200 * dt;
+      if (Math.abs(dx) > .1) ME.dir = dx > 0 ? 1 : -1;
+    }
+    // 모닥불 안으로 못 들어가게
+    const fd = dist(ME.x, ME.y, W/2, H/2);
+    if (fd < 45) {
+      const a = Math.atan2(ME.y - H/2, ME.x - W/2);
+      ME.x = W/2 + Math.cos(a)*45; ME.y = H/2 + Math.sin(a)*45;
+    }
+    ME.x = clamp(ME.x, 24, W-24); ME.y = clamp(ME.y, 24, H-24);
+    if (ME.bt > 0) ME.bt -= dt;
+  }
+  for (const id in peers) if (peers[id].bt > 0) peers[id].bt -= dt;
+  fuel = Math.max(1, fuel - dt*0.02);   // 장작이 천천히 줄어듦
+  for (const f of floaters) {
+    f.x += (f.tx - f.x)*.05; f.y += (f.ty - f.y)*.05; f.ttl -= dt;
+  }
+  for (let i = floaters.length-1; i >= 0; i--) if (floaters[i].ttl <= 0) floaters.splice(i,1);
+}
+
+/* ---------- 그리기 ---------- */
+function drawFire(){
+  const s = 0.6 + fuel*0.12, cx = W/2, cy = H/2;
+  // 바닥 빛
+  const glow = ctx.createRadialGradient(cx, cy, 10, cx, cy, 240*s);
+  glow.addColorStop(0, 'rgba(255,150,60,.45)');
+  glow.addColorStop(1, 'rgba(255,100,20,0)');
+  ctx.fillStyle = glow; ctx.fillRect(cx-260*s, cy-260*s, 520*s, 520*s);
+  // 장작
+  ctx.save(); ctx.translate(cx, cy+6);
+  for (let i = 0; i < 4; i++) {
+    ctx.save(); ctx.rotate(i*Math.PI/2 + .4);
+    ctx.fillStyle = '#5b3418';
+    ctx.fillRect(-36*s, -7*s, 72*s, 14*s);
+    ctx.restore();
+  }
+  ctx.restore();
+  // 불꽃 생성
+  const n = Math.ceil(fuel*2);
+  for (let i = 0; i < n; i++) parts.push({
+    x: cx + (Math.random()-.5)*36*s, y: cy + 6,
+    vx: (Math.random()-.5)*.6, vy: -(1.2 + Math.random()*1.8)*s,
+    life: 1, r: (9 + Math.random()*9)*s
+  });
+  // 불꽃 그리기
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = parts.length-1; i >= 0; i--) {
+    const p = parts[i];
+    p.x += p.vx; p.y += p.vy; p.vx += (Math.random()-.5)*.1;
+    p.life -= .025; p.r *= .985;
+    if (p.life <= 0) { parts.splice(i,1); continue; }
+    const t = p.life;
+    const col = t > .66 ? '255,230,120' : t > .33 ? '255,120,30' : '180,40,20';
+    ctx.fillStyle = `rgba(${col},${(t*.6).toFixed(2)})`;
+    const q = Math.max(4, Math.round(p.r*(.4+t*.6)/3)*3);
+    ctx.fillRect(Math.round(p.x/3)*3 - q/2, Math.round(p.y/3)*3 - q/2, q, q);
+  }
+  ctx.globalCompositeOperation = 'source-over';
+}
+function drawChar(c){
+  const { x, y, sitting, name, bubble, bt, dir = 1, wood } = c;
+  const col = colorOf(name || '?');
+  const S = 3; // 도트 한 칸 크기
+  const blk = (gx, gy, w, h, color) => { ctx.fillStyle = color; ctx.fillRect(x + gx*S, y + gy*S, w*S, h*S); };
+  const skin = '#ffd9b0', dark = '#1a1410', hair = '#3b2414';
+  // 그림자
+  ctx.fillStyle = 'rgba(0,0,0,.4)';
+  ctx.fillRect(x - 9, y + (sitting ? 9 : 27), 18, 3);
+  const ex = dir > 0 ? 1 : -1;
+  if (sitting) {
+    blk(-3, -8, 6, 6, skin); blk(-3, -9, 6, 2, hair);   // 머리
+    blk(-5, -2, 10, 5, col);                            // 몸통
+    blk(-6, 3, 12, 2, dark);                            // 다리
+    blk(-2 + ex, -6, 1, 1, dark); blk(1 + ex, -6, 1, 1, dark); // 눈
+  } else {
+    blk(-3, -14, 6, 6, skin); blk(-3, -15, 6, 2, hair); // 머리
+    blk(-4, -8, 8, 9, col);                             // 몸통
+    blk(-6, -7, 2, 6, col); blk(4, -7, 2, 6, col);      // 팔
+    blk(-3, 1, 2, 6, dark); blk(1, 1, 2, 6, dark);      // 다리
+    blk(-2 + ex, -11, 1, 1, dark); blk(1 + ex, -11, 1, 1, dark); // 눈
+  }
+  // 이름
+  if (wood) {  // 장작을 든 모습
+    const wy = sitting ? -3 : -4;
+    blk(-5, wy, 10, 2, '#6b3f1c'); blk(-5, wy + 2, 10, 2, '#8a5526');
+    blk(-6, wy, 1, 2, '#c08a4f'); blk(5, wy, 1, 2, '#c08a4f');
+  }
+  ctx.font = 'bold 13px "Nanum Myeongjo", "나눔명조", serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
+  ctx.fillText(name || '', x, y - (sitting ? 34 : 46));
+  // 말풍선 (픽셀 박스)
+  if (bubble && bt > 0) {
+    ctx.font = '15px "Nanum Myeongjo", "나눔명조", serif';
+    const w = ctx.measureText(bubble).width + 16, by = y - (sitting ? 62 : 74);
+    ctx.fillStyle = '#000'; ctx.fillRect(x - w/2 - 2, by - 16, w + 4, 24);
+    ctx.fillStyle = '#fff'; ctx.fillRect(x - w/2, by - 14, w, 20);
+    ctx.fillStyle = '#111'; ctx.fillText(bubble, x, by + 1);
+  }
+}
+function drawCharOld(c){
+  const { x, y, sitting, name, bubble, bt, dir = 1 } = c;
+  const col = colorOf(name || '?');
+  ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = col;
+  if (sitting) {
+    ctx.beginPath(); ctx.ellipse(0, 6, 13, 8, 0, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0, -8, 8, 0, Math.PI*2); ctx.fill();
+  } else {
+    ctx.fillRect(-6, -4, 12, 18);
+    ctx.beginPath(); ctx.arc(0, -14, 8, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = col; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(-3,14); ctx.lineTo(-5,25); ctx.moveTo(3,14); ctx.lineTo(5,25); ctx.stroke();
+  }
+  // 눈
+  const hy = sitting ? -8 : -14;
+  ctx.fillStyle = '#111';
+  ctx.fillRect(-3 + dir, hy-1, 2, 2); ctx.fillRect(2 + dir, hy-1, 2, 2);
+  // 이름
+  ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
+  ctx.fillText(name || '', 0, sitting ? -24 : -30);
+  // 말풍선
+  if (bubble && bt > 0) {
+    ctx.font = '14px sans-serif';
+    const w = ctx.measureText(bubble).width + 16, by = sitting ? -62 : -70;
+    ctx.fillStyle = 'rgba(255,255,255,.95)';
+    ctx.fillRect(-w/2, by-18, w, 22);
+    ctx.fillStyle = '#111'; ctx.fillText(bubble, 0, by-3);
+  }
+  ctx.restore();
+}
+const nearPile = () => WOOD_PILES.find(p => dist(ME.x, ME.y, p.fx*W, p.fy*H) < WOOD_PICK_DIST);
+function drawPiles(){
+  for (const p of WOOD_PILES) {
+    const x = Math.round(p.fx*W), y = Math.round(p.fy*H);
+    ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(x-22, y+12, 44, 4);
+    for (let r = 0; r < 3; r++) {
+      const n = r === 1 ? 2 : 3;
+      for (let c = 0; c < n; c++) {
+        const lx = x - 14 + c*12 + (r === 1 ? 6 : 0), ly = y - 4 - r*6;
+        ctx.fillStyle = '#5b3418'; ctx.fillRect(lx, ly, 12, 6);
+        ctx.fillStyle = '#8a5526'; ctx.fillRect(lx, ly, 12, 2);
+        ctx.fillStyle = '#c08a4f'; ctx.fillRect(lx+1, ly+2, 2, 2);
+      }
+    }
+  }
+}
+function draw(){
+  ctx.setTransform(1/PX, 0, 0, 1/PX, 0, 0);
+  ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, W, H);
+  // 계단식 땅 색 (도트 그라데이션 느낌)
+  const bands = ['#120b06', '#180e08', '#1e120a', '#24160d', '#2a1a10'];
+  for (let i = 0; i < bands.length; i++) {
+    ctx.fillStyle = bands[i];
+    ctx.beginPath(); ctx.arc(W/2, H/2, Math.max(W,H)*(.6 - i*.11), 0, Math.PI*2); ctx.fill();
+  }
+  drawFire();
+  drawPiles();
+  // 음식
+  ctx.font = '26px sans-serif'; ctx.textAlign = 'center';
+  for (const f of floaters) {
+    ctx.globalAlpha = Math.min(1, f.ttl/2);
+    ctx.fillText(f.emoji, f.x, f.y);
+  }
+  ctx.globalAlpha = 1;
+  // 다른 사용자
+  for (const id in peers) {
+    const p = peers[id];
+    drawChar({ x: p.fx*W, y: p.fy*H, sitting: p.sitting, name: p.name, bubble: p.bubble, bt: p.bt, wood: p.wood });
+  }
+  // 나
+  if (ME.name) drawChar({ x: ME.x, y: ME.y, sitting: ME.sitting, name: ME.name, bubble: ME.bubble, bt: ME.bt, dir: ME.dir, wood: ME.hasWood });
+  if (ME.name && menu.open) {  // 캠프 셰어링 음식 선택 메뉴 (머리 위 플로팅)
+    const mx = ME.x, my = ME.y - 96, itemW = 64, total = CAMP_FOODS.length * itemW;
+    ctx.fillStyle = 'rgba(0,0,0,.75)'; ctx.fillRect(mx - total/2 - 6, my - 22, total + 12, 44);
+    ctx.textAlign = 'center';
+    CAMP_FOODS.forEach((f, i) => {
+      const ix = mx - total/2 + i*itemW + itemW/2;
+      if (i === menu.sel) { ctx.fillStyle = '#ffe08a'; ctx.fillRect(ix - 30, my - 18, 60, 36); }
+      ctx.font = '20px sans-serif'; ctx.fillStyle = '#000'; ctx.fillText(f.e, ix, my + 2);
+      ctx.font = 'bold 12px "Nanum Myeongjo", "나눔명조", serif'; ctx.fillStyle = i === menu.sel ? '#000' : '#fff'; ctx.fillText(f.n, ix, my + 18);
+    });
+    ctx.font = '12px "Nanum Myeongjo", "나눔명조", serif'; ctx.fillStyle = '#ffe08a'; ctx.fillText('TAB: 변경 · E 떼기: 놓기', mx, my - 28);
+  }
+  if (ME.name) {  // 상황별 조작 안내
+    ctx.font = 'bold 13px "Nanum Myeongjo", "나눔명조", serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#ffe08a';
+    if (!ME.hasWood && nearPile()) ctx.fillText('[F] 장작 들기', ME.x, ME.y + 40);
+    if (ME.hasWood && dist(ME.x, ME.y, W/2, H/2) <= FIRE_WOOD_MAX) ctx.fillText('[F] 장작 넣기', ME.x, ME.y + 40);
+    if (nearFood()) ctx.fillText('[E] 먹기', ME.x, ME.y + 56);
+    else if (!menu.open && nearFire()) ctx.fillText('[E 길게] 캠프 셰어링', ME.x, ME.y + 56);
+  }
+}
+
+/* ---------- 메인 루프 ---------- */
+let last = performance.now();
+function loop(now){
+  const dt = Math.min(.05, (now - last)/1000); last = now;
+  update(dt); draw();
+  view.drawImage(buf, 0, 0, cv.width, cv.height);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
