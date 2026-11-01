@@ -67,6 +67,7 @@ const $ = id => document.getElementById(id);
 const cv = $('c'), view = cv.getContext('2d');
 const buf = document.createElement('canvas'), ctx = buf.getContext('2d');
 const PX = 2; // 도트 크기 (숫자가 클수록 더 굵은 픽셀)
+const ZOOM = 2; // 카메라 줌 배율 (2배 확대)
 let SW = 0, SH = 0; // 실제 화면 크기
 function resize(){
   SW = cv.width = innerWidth; SH = cv.height = innerHeight;
@@ -82,6 +83,8 @@ const cam = { x: 0, y: 0 };  // 카메라 (캐릭터를 따라감)
 const STEP_T = 0.2;         // 한 칸 이동에 걸리는 시간 (초)
 const STEP_GAP = 0.07;      // 칸과 칸 사이 잠깐 멈춤 (초) - 타일을 하나씩 밟는 느낌
 const snap = v => Math.floor(v / TILE) * TILE + TILE / 2; // 칸 중앙 좌표
+// 모닥불은 2x2 타일 오브젝트 (중심 W/2, H/2 기준 32x32px 영역)
+const inFire = (x, y) => Math.abs(x - W/2) < TILE && Math.abs(y - H/2) < TILE;
 const FIRE_SIT_MIN = 40;   // 모닥불에서 이 거리 안에서는 앉기 불가
 const MAX_FUEL = 6;
 const FIRE_WOOD_MAX = 60;  // 장작을 넣을 수 있는 모닥불과의 최대 거리
@@ -99,7 +102,7 @@ const peers = {};          // 다른 사용자
 const ME = { id: Math.random().toString(36).slice(2), name:'', gender:'m', x:0, y:0, z:0, vz:0, sitting:false, bubble:'', bt:0, dir:1, hasWood:false, step:null, gap:0, bob:0 };
 let joyVec = null;
 const labels = [];   // 글자는 도트 버퍼가 아닌 고해상도 화면에 따로 그림 (선명도 유지)
-function label(s, x, y, font, color, align){ labels.push({ s, x: x - cam.x + SW/2, y: y - cam.y + SH/2, font, color, align: align || 'center' }); }
+function label(s, x, y, font, color, align){ labels.push({ s, x: (x - cam.x)*ZOOM + SW/2, y: (y - cam.y)*ZOOM + SH/2, font, color, align: align || 'center' }); }
 
 /* ---------- 유틸 ---------- */
 const dist = (x1,y1,x2,y2) => Math.hypot(x1-x2, y1-y2);
@@ -139,7 +142,7 @@ const handle = d => {
     case 'chat':  addLog(`${d.name}: ${d.text}`); p.bubble = d.text; p.bt = 5; break;
     case 'food':
       p.bubble = d.emoji; p.bt = 3;
-      spawnFood(d.emoji, p.fx*W, p.fy*H); break;
+      spawnFood(d.emoji, d.x, d.y); break;
     case 'music':
       playMusic(d.id); addLog(`${d.name}님이 음악을 틀었어요 🎵`); break;
     case 'stop':
@@ -210,7 +213,7 @@ $('nickIn').addEventListener('keydown', e => { if (e.key === 'Enter') join(); })
 function startStep(sx, sy){
   ME.x = snap(ME.x); ME.y = snap(ME.y);
   const tx = ME.x + sx*TILE, ty = ME.y + sy*TILE;
-  if (dist(tx, ty, W/2, H/2) < FIRE_R) return; // 모닥불 안으로는 이동 안 함
+  if (inFire(tx, ty)) return; // 모닥불(2x2 타일) 안으로는 이동 안 함
   ME.step = { x0: ME.x, y0: ME.y, tx, ty, t: 0 };
   if (sx) ME.dir = sx;
 }
@@ -221,7 +224,6 @@ function jump(){
 function toggleSit(){
   if (!ME.name) return;
   if (ME.sitting) { ME.sitting = false; updateSitBtn(); return; }
-  if (dist(ME.x, ME.y, W/2, H/2) < FIRE_SIT_MIN) { toast('불가에 너무 가깝습니다 🔥'); return; }
   ME.sitting = true; updateSitBtn();
 }
 function interact(){
@@ -241,7 +243,10 @@ function interact(){
 const FIRE_R = 14;
 const FOOD_EAT_DIST = 32; // 바닥 음식을 먹을 수 있는 거리
 function nearFood(){
-  return floaters.find(f => dist(ME.x, ME.y, f.x, f.y) < FOOD_EAT_DIST);
+  // 캐릭터가 음식과 같은 타일 위에 완전히 멈춰 있을 때만 먹기 가능
+  if (ME.step) return null;
+  const cx = snap(ME.x), cy = snap(ME.y);
+  return floaters.find(f => f.tx === cx && f.ty === cy);
 }
 function eatFood(f){
   floaters.splice(floaters.indexOf(f), 1);
@@ -264,8 +269,17 @@ function onEUp(){
 }
 function placeFood(food){
   ME.bubble = food.e; ME.bt = 3;
-  spawnFood(food.e, ME.x, ME.y);
-  send({ type:'food', name:ME.name, emoji:food.e });
+  // 캐릭터 기준 3x3 타일 안에서 빈 칸을 골라 배치 (모닥불 영역 제외)
+  const cx = snap(ME.x), cy = snap(ME.y), cand = [];
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    const x = cx + dx*TILE, y = cy + dy*TILE;
+    if (inFire(x, y)) continue;
+    if (floaters.some(f => f.x === x && f.y === y)) continue;
+    cand.push({ x, y });
+  }
+  const pick = cand.length ? cand[Math.random()*cand.length | 0] : { x: cx, y: cy };
+  spawnFood(food.e, pick.x, pick.y);
+  send({ type:'food', name:ME.name, emoji:food.e, x:pick.x, y:pick.y });
 }
 /* ---------- 유튜브 음악 (/m 링크, /stop) ---------- */
 function playMusic(id){
@@ -305,8 +319,7 @@ function sendChat(){
 }
 function spawnFood(emoji, x, y){
   if (floaters.length > 20) floaters.shift();
-  const a = Math.random()*Math.PI*2, r = 60 + Math.random()*70;
-  floaters.push({ emoji, x, y, tx: W/2 + Math.cos(a)*r, ty: H/2 + Math.sin(a)*r*.6, ttl: 12 });
+  floaters.push({ emoji, x, y, tx: x, ty: y, ttl: 12 }); // 타일 중앙 좌표 그대로 사용
 }
 $('btnSit').onclick = toggleSit;
 $('btnWood').onclick = interact;
@@ -379,19 +392,13 @@ function update(dt){
     } else if (sx || sy) {
       startStep(sx, sy);
     }
-    // 모닥불 안으로 못 들어가게
-    const fd = dist(ME.x, ME.y, W/2, H/2);
-    if (fd < FIRE_R) {
-      const a = Math.atan2(ME.y - H/2, ME.x - W/2);
-      ME.x = W/2 + Math.cos(a)*FIRE_R; ME.y = H/2 + Math.sin(a)*FIRE_R;
-    }
     if (ME.z > 0 || ME.vz > 0) {  // 점프 물리 (중력)
       ME.vz -= 900*dt; ME.z += ME.vz*dt;
       if (ME.z <= 0) { ME.z = 0; ME.vz = 0; }
     }
     ME.x = clamp(ME.x, 8, W-8); ME.y = clamp(ME.y, 8, H-8);
     if (ME.bt > 0) ME.bt -= dt;
-    cam.x = clamp(ME.x, SW/2, W-SW/2); cam.y = clamp(ME.y, SH/2, H-SH/2);
+    cam.x = clamp(ME.x, SW/2/ZOOM, W-SW/2/ZOOM); cam.y = clamp(ME.y, SH/2/ZOOM, H-SH/2/ZOOM);
   }
   for (const id in peers) if (peers[id].bt > 0) peers[id].bt -= dt;
   fuel = Math.max(1, fuel - dt*0.02);   // 장작이 천천히 줄어듦
@@ -529,9 +536,9 @@ function drawPiles(){
 }
 function draw(){
   labels.length = 0;
-  ctx.setTransform(1/PX, 0, 0, 1/PX, 0, 0);
+  ctx.setTransform(ZOOM/PX, 0, 0, ZOOM/PX, 0, 0);
   ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, SW, SH);
-  ctx.translate(SW/2 - cam.x, SH/2 - cam.y); // 카메라 적용 (이후 월드 좌표로 그림)
+  ctx.translate(SW/2/ZOOM - cam.x, SH/2/ZOOM - cam.y); // 카메라 적용 (2배 줌)
   // 계단식 땅 색 (도트 그라데이션 느낌)
   // 맵 전체(6144×4608px)를 덮는 바닥 색 + 모닥불 중심의 계단식 원 그라데이션
   ctx.fillStyle = '#120b06'; ctx.fillRect(0, 0, W, H);
@@ -547,12 +554,12 @@ function draw(){
   drawFire();
   drawPiles();
   // 음식
-  ctx.font = '16px sans-serif'; ctx.textAlign = 'center';
+  ctx.font = '12px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   for (const f of floaters) {
     ctx.globalAlpha = Math.min(1, f.ttl/2);
     ctx.fillText(f.emoji, f.x, f.y);
   }
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha = 1; ctx.textBaseline = 'alphabetic';
   // 다른 사용자
   for (const id in peers) {
     const p = peers[id];
