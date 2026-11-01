@@ -67,15 +67,18 @@ const $ = id => document.getElementById(id);
 const cv = $('c'), view = cv.getContext('2d');
 const buf = document.createElement('canvas'), ctx = buf.getContext('2d');
 const PX = 2; // 도트 크기 (숫자가 클수록 더 굵은 픽셀)
-let W = 0, H = 0;
+let SW = 0, SH = 0; // 실제 화면 크기
 function resize(){
-  W = cv.width = innerWidth; H = cv.height = innerHeight;
-  buf.width = Math.ceil(W/PX); buf.height = Math.ceil(H/PX);
+  SW = cv.width = innerWidth; SH = cv.height = innerHeight;
+  buf.width = Math.ceil(SW/PX); buf.height = Math.ceil(SH/PX);
   view.imageSmoothingEnabled = false;
 }
 addEventListener('resize', resize); resize();
 
 const TILE = 48;            // 타일 한 칸 크기 (px)
+const MAP_W = 128, MAP_H = 96; // 고정 맵 크기 (타일 수)
+const W = MAP_W*TILE, H = MAP_H*TILE; // 맵 전체 크기 (px, 월드 좌표)
+const cam = { x: 0, y: 0 };  // 카메라 (캐릭터를 따라감)
 const STEP_T = 0.2;         // 한 칸 이동에 걸리는 시간 (초)
 const STEP_GAP = 0.07;      // 칸과 칸 사이 잠깐 멈춤 (초) - 타일을 하나씩 밟는 느낌
 const snap = v => Math.floor(v / TILE) * TILE + TILE / 2; // 칸 중앙 좌표
@@ -83,7 +86,8 @@ const FIRE_SIT_MIN = 90;   // 모닥불에서 이 거리 안에서는 앉기 불
 const MAX_FUEL = 6;
 const FIRE_WOOD_MAX = 130;  // 장작을 넣을 수 있는 모닥불과의 최대 거리
 const WOOD_PICK_DIST = 70; // 장작더미에서 장작을 집을 수 있는 거리
-const WOOD_PILES = [{fx:.12,fy:.22},{fx:.86,fy:.2},{fx:.1,fy:.78},{fx:.9,fy:.8}];
+// 장작더미: 맵 네 귀퉁이 근처의 타일 좌표 (tx, ty) → 픽셀 좌표로 변환
+const WOOD_PILES = [[10,10],[117,10],[10,85],[117,85]].map(([tx,ty]) => ({ x: tx*TILE + TILE/2, y: ty*TILE + TILE/2 }));
 const CAMP_FOODS = [{n:'감자',e:'🥔'},{n:'고구마',e:'🍠'},{n:'고기',e:'🍖'},{n:'소세지',e:'🌭'}];
 let eHold = null;                 // E 누르고 있는 상태 (타이머)
 const menu = { open:false, sel:0 }; // 캠프 셰어링 음식 선택 메뉴
@@ -95,7 +99,7 @@ const peers = {};          // 다른 사용자
 const ME = { id: Math.random().toString(36).slice(2), name:'', gender:'m', x:0, y:0, z:0, vz:0, sitting:false, bubble:'', bt:0, dir:1, hasWood:false, step:null, gap:0, bob:0 };
 let joyVec = null;
 const labels = [];   // 글자는 도트 버퍼가 아닌 고해상도 화면에 따로 그림 (선명도 유지)
-function label(s, x, y, font, color, align){ labels.push({ s, x, y, font, color, align: align || 'center' }); }
+function label(s, x, y, font, color, align){ labels.push({ s, x: x - cam.x + SW/2, y: y - cam.y + SH/2, font, color, align: align || 'center' }); }
 
 /* ---------- 유틸 ---------- */
 const dist = (x1,y1,x2,y2) => Math.hypot(x1-x2, y1-y2);
@@ -189,7 +193,7 @@ let selGender = null;
 function join(){
   if (!selGender) { toast('성별을 선택해 주세요'); return; }
   const n = $('nickIn').value.trim().slice(0,10) || ('캠퍼' + Math.floor(Math.random()*900+100));
-  ME.name = n; ME.gender = selGender; ME.x = snap(W*.3); ME.y = snap(H*.62);
+  ME.name = n; ME.gender = selGender; ME.x = snap(W/2 - TILE*2); ME.y = snap(H/2 + TILE*2);
   $('nick').style.display = 'none';
   startFireSound();
   addLog(`${n}님, 모닥불 캠프에 오신 걸 환영해요! 🔥`);
@@ -386,6 +390,7 @@ function update(dt){
     }
     ME.x = clamp(ME.x, 24, W-24); ME.y = clamp(ME.y, 24, H-24);
     if (ME.bt > 0) ME.bt -= dt;
+    cam.x = clamp(ME.x, SW/2, W-SW/2); cam.y = clamp(ME.y, SH/2, H-SH/2);
   }
   for (const id in peers) if (peers[id].bt > 0) peers[id].bt -= dt;
   fuel = Math.max(1, fuel - dt*0.02);   // 장작이 천천히 줄어듦
@@ -505,10 +510,10 @@ function drawCharOld(c){
   }
   ctx.restore();
 }
-const nearPile = () => WOOD_PILES.find(p => dist(ME.x, ME.y, p.fx*W, p.fy*H) < WOOD_PICK_DIST);
+const nearPile = () => WOOD_PILES.find(p => dist(ME.x, ME.y, p.x, p.y) < WOOD_PICK_DIST);
 function drawPiles(){
   for (const p of WOOD_PILES) {
-    const x = Math.round(p.fx*W), y = Math.round(p.fy*H);
+    const x = Math.round(p.x), y = Math.round(p.y);
     ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(x-22, y+12, 44, 4);
     for (let r = 0; r < 3; r++) {
       const n = r === 1 ? 2 : 3;
@@ -524,12 +529,15 @@ function drawPiles(){
 function draw(){
   labels.length = 0;
   ctx.setTransform(1/PX, 0, 0, 1/PX, 0, 0);
-  ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#05070c'; ctx.fillRect(0, 0, SW, SH);
+  ctx.translate(SW/2 - cam.x, SH/2 - cam.y); // 카메라 적용 (이후 월드 좌표로 그림)
   // 계단식 땅 색 (도트 그라데이션 느낌)
-  const bands = ['#120b06', '#180e08', '#1e120a', '#24160d', '#2a1a10'];
+  // 맵 전체(6144×4608px)를 덮는 바닥 색 + 모닥불 중심의 계단식 원 그라데이션
+  ctx.fillStyle = '#120b06'; ctx.fillRect(0, 0, W, H);
+  const bands = ['#180e08', '#1e120a', '#24160d', '#2a1a10'];
   for (let i = 0; i < bands.length; i++) {
     ctx.fillStyle = bands[i];
-    ctx.beginPath(); ctx.arc(W/2, H/2, Math.max(W,H)*(.6 - i*.11), 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(W/2, H/2, Math.min(W,H)*(.4 - i*.08), 0, Math.PI*2); ctx.fill();
   }
   // 타일 격자 (반투명 회색 선)
   ctx.fillStyle = 'rgba(128,128,128,0.5)';
