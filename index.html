@@ -23,12 +23,14 @@ button:active{filter:brightness(.85)}
 #nick input{width:100%;padding:10px;border-radius:10px;border:none;margin:10px 0;box-sizing:border-box;font-size:15px;outline:none}
 #nick button{width:100%}
 #nick p{color:#cbd5e1;font-size:14px;margin:4px 0}
+#yt{position:fixed;left:-20px;top:-20px;width:2px;height:2px;opacity:0;pointer-events:none}
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div id="log"></div>
 <div id="toast"></div>
+<div id="yt"></div>
 <div id="joy"><div id="knob"></div></div>
 <div id="actions">
   <button id="btnSit">🪑 앉기 (C)</button>
@@ -117,9 +119,12 @@ const handle = d => {
     case 'state': p.fx = d.fx; p.fy = d.fy; p.sitting = d.sitting; p.wood = !!d.hasWood; break;
     case 'chat':  addLog(`${d.name}: ${d.text}`); p.bubble = d.text; p.bt = 5; break;
     case 'food':
-      addLog(`${d.name}님이 캠프 셰어링으로 ${d.emoji}를 놓았어요 🙌`);
       p.bubble = d.emoji; p.bt = 3;
       spawnFood(d.emoji, p.fx*W, p.fy*H); break;
+    case 'music':
+      playMusic(d.id); addLog(`${d.name}님이 음악을 틀었어요 🎵`); break;
+    case 'stop':
+      stopMusic(); addLog(`${d.name}님이 음악을 껐어요 🔇`); break;
     case 'wood':
       fuel = d.fuel; addLog(`${d.name}님이 장작을 넣었어요 🪵`); break;
   }
@@ -225,13 +230,34 @@ function onEUp(){
 function placeFood(food){
   ME.bubble = food.e; ME.bt = 3;
   spawnFood(food.e, ME.x, ME.y);
-  addLog(`${ME.name}님이 ${food.n}(${food.e})를 모닥불 근처에 놓았어요 🙌`);
   send({ type:'food', name:ME.name, emoji:food.e });
 }
+/* ---------- 유튜브 음악 (/m 링크, /stop) ---------- */
+function playMusic(id){
+  const box = $('yt');
+  box.innerHTML = '';
+  const f = document.createElement('iframe');
+  f.width = '2'; f.height = '2';
+  f.allow = 'autoplay; encrypted-media';
+  f.src = `https://www.youtube.com/embed/${id}?autoplay=1&loop=1&playlist=${id}&controls=0`;
+  box.appendChild(f);
+}
+function stopMusic(){ $('yt').innerHTML = ''; }
 function sendChat(){
   const t = $('msg').value.trim();
   if (!t || !ME.name) return;
   $('msg').value = '';
+  if (t === '/stop') {
+    stopMusic(); addLog(`${ME.name}님이 음악을 껐어요 🔇`);
+    send({ type:'stop', name:ME.name }); return;
+  }
+  if (t.startsWith('/m ')) {
+    const m = t.match(/(?:youtu\.be\/|v=|embed\/|shorts\/)([A-Za-z0-9_-]{11})/);
+    if (!m) { toast('유튜브 링크를 입력해 주세요 🎵'); return; }
+    playMusic(m[1]);
+    addLog(`${ME.name}님이 음악을 틀었어요 🎵`);
+    send({ type:'music', name:ME.name, id:m[1] }); return;
+  }
   ME.bubble = t; ME.bt = 5;
   addLog(`${ME.name}: ${t}`);
   send({ type:'chat', name:ME.name, text:t });
